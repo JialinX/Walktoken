@@ -84,6 +84,7 @@ const MintButton = styled(Button)(({  }) => ({
     const [checkedIn, setCheckedIn] = useState(false);
     const [takenChallenge, setTakenChallenge] = useState(false);
     const [takePending, setTakePending] = useState(false);
+    const [takeDone, setTakeDone] = useState(false);
   
     const handleSignOut = async () => {
     await signOut();
@@ -123,6 +124,31 @@ const MintButton = styled(Button)(({  }) => ({
           setNotIssued('Error');
         }
       };
+
+      const getChallengeDone = async () => {
+        if(isConnected){
+          try{
+            const [addresses] = await sdk.getWalletAddress("ethereum");
+            const hasDone = await sdk.callContractMethod({
+              method: "hasDoneQuest",
+              params: [addresses],
+              abi: abi,
+              contractAddress: contract,
+            });
+            const hasToday = await sdk.callContractMethod({
+              method: "hasQuest",
+              params: [addresses],
+              abi: abi,
+              contractAddress: contract,
+            });
+            setTakeDone(hasDone && hasToday);
+            setTakenChallenge(hasToday);
+            
+          } catch (error) {
+          console.error("Error fetching challenge status:", error);
+          }
+        }
+      }
   
       function waitForQuestUpdate(contract: ethers.Contract): Promise<number>  {
         return new Promise((resolve) => {
@@ -138,18 +164,24 @@ const MintButton = styled(Button)(({  }) => ({
           if(!takenChallenge){
             setTakePending(true);
             setTakenChallenge(true);
-            await window.ethereum.request({method: 'eth_requestAccounts'})
-            const provider = new BrowserProvider(window.ethereum);
-            const signer = await provider.getSigner()
-            const contracti = new ethers.Contract(contract, abi, signer);
-            
-            await contracti.takeQuest(address);
-            const newGoal = await waitForQuestUpdate(contracti)
+            let newGoal = Number(sessionStorage.getItem("newGoal"));
+            if(newGoal == undefined || newGoal == null || newGoal == 0){
+              await window.ethereum.request({method: 'eth_requestAccounts'})
+              const provider = new BrowserProvider(window.ethereum);
+              const signer = await provider.getSigner()
+              const contracti = new ethers.Contract(contract, abi, signer);
+              const p = waitForQuestUpdate(contracti)
+              await contracti.takeQuest(address);
+              newGoal = await p;
+              sessionStorage.setItem("newGoal", newGoal.toString());
+              console.log(newGoal.toString());
+            }
             setTakePending(false);
-
-            setStepGoal(Number(newGoal));
-            console.log(stepGoal);
-            setCurrentSteps(20000);
+            console.log(newGoal);
+            setStepGoal(newGoal);
+            // console.log(stepGoal);
+            setCurrentSteps(newGoal);
+            sessionStorage.setItem("currentStep", newGoal.toString());
             // Simulate step progress
             const interval = setInterval(() => {
               setCurrentSteps(prev => {
@@ -160,7 +192,9 @@ const MintButton = styled(Button)(({  }) => ({
                 return prev + Math.floor(Math.random() * 100);
               });
             }, 1000);
+            setTakeDone(true);
           }else if(currentSteps >= stepGoal){
+            
             const result = await sdk.callContractMethod({
               method: "finishQuest",
               params: [address],
@@ -187,7 +221,6 @@ const MintButton = styled(Button)(({  }) => ({
             const product = products.find(p => p.id === 0);
             if (typeof product != 'undefined'){
               const tokenURI =  product.tokenURI;
-              // const mintTx = await productContract.mintProduct(userAddress, tokenURI);
               await window.ethereum.request({ method: 'eth_requestAccounts' })
               const provider = new ethers.BrowserProvider(window.ethereum)
               const signer = await provider.getSigner()
@@ -196,13 +229,12 @@ const MintButton = styled(Button)(({  }) => ({
               const userAddress = await signer.getAddress();
               const checked = await productContract.isCheckedIn(userAddress);
               if (!checked){
-                const checkTx = await productContract.checkedIn(userAddress);
-                checkTx.wait();
-                const mintTx = await productContract.mintProduct(userAddress, tokenURI);
-                console.log(tokenURI)
+                const mintTx = await productContract.mintCheckInProduct(userAddress, tokenURI);
+                // console.log(tokenURI)
                 await mintTx.wait();
                 alert(`You got a NFT: WALK HKUST`);
                 setCheckedIn(true);
+                sessionStorage.setItem("checkedIn", "true");
                 if (typeof (window as Window).fetchNFTs === 'function' && typeof window !== 'undefined' && window.fetchNFTs) {
                   window.fetchNFTs();
                 }
@@ -227,7 +259,7 @@ const MintButton = styled(Button)(({  }) => ({
       const getMintToken = async () => {
         try{
           const [addresses] = await sdk.getWalletAddress("ethereum");
-          console.log('ree');
+          // console.log('ree');
           const result = await sdk.callContractMethod({
             method: "mintTokens",
             params: [addresses, getRandomInt(8000, 20000)],
@@ -245,12 +277,17 @@ const MintButton = styled(Button)(({  }) => ({
 
       useEffect(() => {
         getNotIssued();
+        setStepGoal(Number(sessionStorage.getItem("newGoal")));
+        setCurrentSteps(Number(sessionStorage.getItem("currentStep")));
+        setCheckedIn(Boolean(sessionStorage.getItem("checkedIn")));
+        getChallengeDone();
       }, []); 
 
     
       useEffect(() => {
         if (isConnected) {
           getBalance();
+          getChallengeDone();
         }
         getNotIssued();
       }, [isConnected, mintDone]);
@@ -421,7 +458,7 @@ const MintButton = styled(Button)(({  }) => ({
         <CardContent sx={{ p: 3, display: 'flex', flexDirection: 'column', height: '87%', justifyContent: 'space-between' }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <Typography variant="subtitle1" component="h2">
-                Step Challenge
+                Daily Step Challenge
                 </Typography>
               </Box>
               <br></br>
@@ -433,7 +470,7 @@ const MintButton = styled(Button)(({  }) => ({
                   size={290} 
                 />
               <Typography variant="subtitle1">
-                Goal: {stepGoal} steps
+                Goal: { stepGoal} steps
               </Typography>
 
               <LinearProgress 
@@ -457,26 +494,14 @@ const MintButton = styled(Button)(({  }) => ({
             <div className="relative group" key="r">
                <div className="absolute -inset-0.5 bg-blue-500 rounded-full opacity-75 group-hover:opacity-100 blur transition duration-1000 group-hover:duration-200 animate-pulse" key="b"></div>
 
-            {/* <Button 
-              variant="contained" 
-              onClick={handleStepChallenge}
-              sx={{
-                backgroundColor: '#2196F3',
-                '&:hover': {
-                  backgroundColor: '#1976D2'
-                }
-              }}
-            >
-              Start New Challenge
-            </Button> */}
 
             <CustomGlowingButton key="challenge" 
                                 onClick={handleStepChallenge}
                                 color="#1976D2"
                             >
                                 {isConnected
-                                ? (takenChallenge ? (takePending ? "Pending": (currentSteps >= stepGoal ? "Done": "In progress"))
-                                : "Start New Challenge") : "Start New Challenge"}
+                                ? (takeDone ? "Done" : (takenChallenge ? (takePending ? "Pending": (currentSteps >= stepGoal && stepGoal != 0 ? "Done": "In progress"))
+                                : "Start New Challenge")) : "Start New Challenge"}
               </CustomGlowingButton>
             </div>
           </CardContent>
@@ -486,7 +511,7 @@ const MintButton = styled(Button)(({  }) => ({
         <CardContent sx={{ p: 3, display: 'flex', flexDirection: 'column', height: '87%', justifyContent: 'space-between' }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <Typography variant="subtitle1" component="h2">
-                Daily Check-in
+                Check-in Quest For Specialized NFT
                 </Typography>
               </Box>
             <br></br> 
